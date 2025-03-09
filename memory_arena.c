@@ -15,11 +15,12 @@ memory_arena_init(MemoryArena* arena, uintptr_t minimum_block_capacity)
 {
 	assert(minimum_block_capacity > 0);
 
-	MemoryArena arena = {0};
+	*arena = (MemoryArena){0};
 	arena->minimum_block_capacity = minimum_block_capacity;
 }
 
 static inline
+void
 __memory_arena_free_last_block(MemoryArena* arena)
 {
 	assert(arena != NULL);
@@ -27,8 +28,8 @@ __memory_arena_free_last_block(MemoryArena* arena)
 	MemoryArenaBlock* block = arena->head_block;
 
 	free(block->data);
-	free(block);
 	arena->head_block = block->next;
+	free(block);
 }
 
 void
@@ -47,6 +48,9 @@ memory_arena_scope_start(MemoryArena* arena)
 
 	MemoryArenaScope scope = {0};
 
+	if (arena->head_block == NULL)
+		return (MemoryArenaScope){0};
+
 	scope.arena = arena;
 	scope.block = arena->head_block;
 	scope.top = arena->head_block->top;
@@ -54,28 +58,60 @@ memory_arena_scope_start(MemoryArena* arena)
 	return scope;
 }
 
+// TODO(Alan): Could be better to not free memory for speed
 void
 memory_arena_scope_end(MemoryArena* arena, MemoryArenaScope scope)
 {
 	assert(arena != NULL);
 
 	// scope represent the past, so no need for a pointer to the previous block.
-	
 	while (arena->head_block != scope.block)
 		__memory_arena_free_last_block(arena);
 	
 	// now arena->head_block is the scope's block.
-
-	arena->head_block->top = scope.top;
-	
+	if (arena->head_block)
+		arena->head_block->top = scope.top;
 }
 
+// TODO(Alan): Could be better to not free memory for speed
 void
 memory_arena_clear(MemoryArena* arena)
 {
 	assert(arena != NULL);
 
-	arena->top = 0;
+	while (arena->head_block && arena->head_block->next)
+		__memory_arena_free_last_block(arena);
+	if (arena->head_block)
+		arena->head_block->top = 0;
+}
+
+static inline
+MemoryArenaBlock*
+__memory_arena_new_block(MemoryArena* arena, MemoryArenaBlock* current_block, uintptr_t size, uintptr_t alignment)
+{
+	size_t alloc_size = MAX(arena->minimum_block_capacity, size);
+	alloc_size = __align_forward(alloc_size, alignment);
+
+	MemoryArenaBlock* new_block = malloc(sizeof(MemoryArenaBlock));
+
+	if (new_block == NULL) return NULL;
+
+	// We define the new block of memory
+	*new_block = (MemoryArenaBlock){0};
+	new_block->data = malloc(alloc_size);
+	new_block->capacity = alloc_size;
+	new_block->top = __align_forward(size, alignment);
+	new_block->next = current_block;
+
+	if (new_block->data == NULL)
+	{
+		free(new_block);
+		return NULL;
+	}
+
+	arena->head_block = new_block;
+
+	return new_block;
 }
 
 void*
@@ -85,23 +121,29 @@ memory_arena_push(MemoryArena* arena, uintptr_t size, uintptr_t alignment)
 	assert(alignment > 0);
 	assert((alignment & (alignment - 1)) == 0);
 
-	uintptr_t current_addr = (uintptr_t)arena->data + arena->top;
+	MemoryArenaBlock* block = arena->head_block;
+
+	if (block == NULL)
+	{
+		block = __memory_arena_new_block(arena, block, size, alignment);
+		if (block == NULL)
+			return NULL;
+	}
+
+	uintptr_t current_addr = (uintptr_t)block->data + block->top;
 	uintptr_t aligned_addr = __align_forward(current_addr, alignment);
 	uintptr_t padding = aligned_addr - current_addr;
 
-	if (arena->top + padding + size > arena->capacity) return NULL;
+	if (block->top + padding + size > block->capacity)
+	{
+		if (__memory_arena_new_block(arena, block, size, alignment) == NULL)
+			return NULL;
 
-	arena->top += padding + size;
+		// INFO(Alan): malloc should already align the memory
+		return arena->head_block->data;
+	}
+
+	block->top += padding + size;
 
 	return (void*)aligned_addr;
-}
-
-void
-memory_arena_pop(MemoryArena* arena, uintptr_t size)
-{
-	assert(arena != NULL);
-
-	if (size > arena->top) return;
-
-	arena->top -= size;
 }

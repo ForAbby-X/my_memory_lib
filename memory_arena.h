@@ -31,6 +31,9 @@
 |
 */
 
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
+#define MIN(X, Y) (((X) > (Y)) ? (Y) : (X))
+
 typedef struct MemoryArenaBlock
 {
 	struct MemoryArenaBlock* next;
@@ -66,7 +69,7 @@ MemoryArenaScope
 memory_arena_scope_start(MemoryArena* arena);
 
 void
-memory_arena_scope_end(MemoryArena* arena, uintptr_t position);
+memory_arena_scope_end(MemoryArena* arena, MemoryArenaScope scope);
 
 void
 memory_arena_clear(MemoryArena* arena);
